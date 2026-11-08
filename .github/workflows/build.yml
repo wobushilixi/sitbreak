@@ -1,0 +1,42 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: Build
+        shell: cmd
+        run: |
+          set "MINGW_BIN=C:\msys64\mingw64\bin"
+          build.bat
+
+      - name: Smoke test (selftest hook)
+        shell: pwsh
+        run: |
+          $exe = "build\SitBreak.exe"
+          if (-not (Test-Path $exe)) { throw "exe not built" }
+          $f = Get-Item $exe
+          "size = {0:N0} bytes" -f $f.Length
+          (Get-FileHash $exe -Algorithm SHA256).Hash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SitBreak-windows-x64
+          path: build/SitBreak.exe
+          if-no-files-found: error

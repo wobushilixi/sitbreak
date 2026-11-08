@@ -1,0 +1,21 @@
+# build output
+build/
+*.exe
+*.o
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# python helpers
+__pycache__/
+*.pyc
+
+# scratch screenshots from tools/shot.py
+shots/
+
+# os noise
+Thumbs.db
+Desktop.ini
+.DS_Store
