@@ -1504,10 +1504,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             } else if (ev == NIN_SELECT || ev == NIN_KEYSELECT ||
                        ev == WM_LBUTTONUP || ev == WM_LBUTTONDBLCLK) {
                 AppLog(L"tray click");
-                if (IsWindowVisible(h) && !IsIconic(h) && GetForegroundWindow() == h)
-                    ShowWindow(h, SW_MINIMIZE);
-                else
-                    UI_ShowMain(true);
+                UI_ShowMain(true);
             }
             return 0;
         }
