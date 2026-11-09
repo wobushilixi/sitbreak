@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <dwmapi.h>
 #include <mmsystem.h>
+#include <shobjidl.h>
+#include <propvarutil.h>
+#include <propkey.h>
 
 // ---------------------------------------------------------------- 全局
 static Com<ID2D1Factory>   g_d2d;
@@ -75,6 +78,9 @@ static bool g_demo = false;
 static bool g_silent = false;
 static int g_setAuto = 0;   // 1 开 / -1 关 / 0 不处理
 static bool g_quitReq = false;   // 第二个实例带 --quit：让已在跑的实例退出
+static bool g_showReq = false;   // 第二个实例带 --show：把主界面叫出来
+static bool g_breakReq = false;  // 第二个实例带 --break：立刻起身
+static bool g_pauseReq = false;  // 第二个实例带 --pause：暂停/继续
 static std::wstring g_demoKind;
 static UINT g_msgTaskbarCreated = 0;
 static int g_promptX = 0, g_promptY = 0;
@@ -1442,6 +1448,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_SYSCOMMAND: {
             UINT cmd = (UINT)(wp & 0xFFF0);
+            if (cmd == SC_RESTORE) AppLog(L"sc restore");
+            if (cmd == SC_MINIMIZE) AppLog(L"sc minimize");
             if (cmd == SC_RESTORE || cmd == SC_MINIMIZE) {
                 LRESULT r = DefWindowProcW(h, msg, wp, lp);   // 系统负责最小化/还原
                 if (cmd == SC_RESTORE && h == g_main.hwnd) {
@@ -1455,6 +1463,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
 
         case WM_ACTIVATE:
+            AppLog(L"activate");
             if (LOWORD(wp) != WA_INACTIVE && IsIconic(h)) ShowWindow(h, SW_RESTORE);
             break;
 
@@ -1481,13 +1490,33 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_TRAY:
             if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU) {
+                AppLog(L"tray menu");
                 App::I().TrayMenu();
             } else if (lp == WM_LBUTTONUP) {
-                UI_ShowMain(true);
+                // 左键：已经在最前就收起来，否则叫出来（和系统托盘图标的习惯一致）
+                AppLog(L"tray click");
+                if (IsWindowVisible(h) && !IsIconic(h) && GetForegroundWindow() == h)
+                    ShowWindow(h, SW_MINIMIZE);
+                else
+                    UI_ShowMain(true);
             }
             return 0;
 
+        case WM_HOTKEY:
+            AppLog(L"hotkey");
+            UI_ShowMain(true);
+            return 0;
+
+        case WM_BREAKNOW:
+            App::I().BreakNow();
+            return 0;
+
+        case WM_TOGGLEPAUSE:
+            App::I().TogglePause();
+            return 0;
+
         case WM_SHOWMAIN:
+            AppLog(L"show main");
             UI_ShowMain(true);
             return 0;
 
@@ -1708,6 +1737,67 @@ static void CreateWin(Win& w, int W, int H, DWORD exStyle, LPCWSTR title) {
                              GetModuleHandleW(nullptr), nullptr);
 }
 
+// 任务栏按钮右键 → 跳转列表。把常用动作列进去，右键才有反应。
+static void SetupJumpList() {
+    wchar_t exe[MAX_PATH * 2] = {};
+    GetModuleFileNameW(nullptr, exe, ARRAYSIZE(exe));
+
+    Com<ICustomDestinationList> jump;
+    if (FAILED(CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(jump.put())))) {
+        AppLog(L"jumplist: no destlist");
+        return;
+    }
+    UINT slots = 0;
+    Com<IObjectArray> removed;
+    if (FAILED(jump->BeginList(&slots, IID_PPV_ARGS(removed.put())))) {
+        AppLog(L"jumplist: begin failed");
+        return;
+    }
+    Com<IObjectCollection> list;
+    if (FAILED(CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(list.put())))) {
+        AppLog(L"jumplist: no collection");
+        return;
+    }
+
+    struct Item { const wchar_t* name; const wchar_t* arg; };
+    const Item items[] = {
+        { L"显示主界面", L"--show" },
+        { L"现在起身", L"--break" },
+        { L"暂停 / 继续提醒", L"--pause" },
+        { L"退出 SitBreak", L"--quit" },
+    };
+    for (const Item& it : items) {
+        Com<IShellLinkW> link;
+        if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(link.put())))) continue;
+        link->SetPath(exe);
+        link->SetArguments(it.arg);
+        link->SetIconLocation(exe, 0);
+        link->SetDescription(it.name);
+        Com<IPropertyStore> ps;
+        if (SUCCEEDED(link->QueryInterface(IID_PPV_ARGS(ps.put())))) {
+            PROPVARIANT pv;
+            PropVariantInit(&pv);
+            pv.vt = VT_LPWSTR;
+            pv.pwszVal = const_cast<wchar_t*>(it.name);
+            ps->SetValue(PKEY_Title, pv);
+            ps->Commit();
+        }
+        list->AddObject(link.get());
+    }
+    if (FAILED(jump->AddUserTasks(list.get()))) {
+        AppLog(L"jumplist: add failed");
+        return;
+    }
+    if (FAILED(jump->CommitList())) {
+        AppLog(L"jumplist: commit failed");
+        return;
+    }
+    AppLog(L"jumplist ok");
+}
+
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     Log(L"start");
     {
@@ -1720,6 +1810,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         }
         if (cmd.find(L"--silent") != std::wstring::npos) g_silent = true;
         if (cmd.find(L"--quit") != std::wstring::npos) g_quitReq = true;
+        if (cmd.find(L"--show") != std::wstring::npos) g_showReq = true;
+        if (cmd.find(L"--break") != std::wstring::npos) g_breakReq = true;
+        if (cmd.find(L"--pause") != std::wstring::npos) g_pauseReq = true;
         if (cmd.find(L"--autostart=on") != std::wstring::npos) g_setAuto = 1;
         else if (cmd.find(L"--autostart=off") != std::wstring::npos) g_setAuto = -1;
     }
@@ -1737,12 +1830,16 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
             DWORD pid = 0;
             GetWindowThreadProcessId(other, &pid);
             AllowSetForegroundWindow(pid);
-            PostMessageW(other, WM_SHOWMAIN, 0, 0);
-            // 兜底：即使消息没被主循环及时处理，也直接把它叫到前台
-            ShowWindow(other, IsIconic(other) ? SW_RESTORE : SW_SHOWNORMAL);
-            SetWindowPos(other, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-            SetForegroundWindow(other);
-            Log(L"raised");
+            if (g_breakReq) PostMessageW(other, WM_BREAKNOW, 0, 0);
+            else if (g_pauseReq) PostMessageW(other, WM_TOGGLEPAUSE, 0, 0);
+            if (g_showReq || (!g_breakReq && !g_pauseReq)) {
+                PostMessageW(other, WM_SHOWMAIN, 0, 0);
+                // 兜底：即使消息没被主循环及时处理，也直接把它叫到前台
+                ShowWindow(other, IsIconic(other) ? SW_RESTORE : SW_SHOWNORMAL);
+                SetWindowPos(other, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                SetForegroundWindow(other);
+                Log(L"raised");
+            }
         }
         return 0;
     }
@@ -1807,6 +1904,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     Log(L"app init ok");
 
     SetTimer(g_main.hwnd, 1, 1000, nullptr);
+    SetupJumpList();
+    // Ctrl+Alt+S：不管窗口在哪，一键叫出来
+    if (!RegisterHotKey(g_main.hwnd, HOTKEY_SHOW, MOD_CONTROL | MOD_ALT, 'S'))
+        AppLog(L"hotkey failed");
+    else
+        AppLog(L"hotkey ok");
     if (g_setAuto != 0) {
         a.SetAutostart(g_setAuto > 0);
         AppLog(g_setAuto > 0 ? L"autostart on" : L"autostart off");
