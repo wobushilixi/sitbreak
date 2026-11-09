@@ -28,6 +28,12 @@ static UINT  g_dpi = 96;
 #ifndef DWMWA_COLOR_NONE
 #define DWMWA_COLOR_NONE 0xFFFFFFFE
 #endif
+#ifndef NIN_SELECT
+#define NIN_SELECT (WM_USER + 0)
+#endif
+#ifndef NIN_KEYSELECT
+#define NIN_KEYSELECT (NIN_SELECT | 0x1)
+#endif
 
 // 控件 id
 enum {
@@ -1488,12 +1494,15 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             ShowWindow(h, SW_HIDE);
             return 0;
 
-        case WM_TRAY:
-            if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU) {
+        case WM_TRAY: {
+            // NOTIFYICON_VERSION_4 下：左键来 NIN_SELECT / NIN_KEYSELECT，右键来 WM_CONTEXTMENU，
+            // 老版本则是 WM_LBUTTONUP / WM_RBUTTONUP。两套都接住，托盘才真的点得动。
+            UINT ev = (UINT)lp;
+            if (ev == WM_RBUTTONUP || ev == WM_CONTEXTMENU || ev == WM_RBUTTONDOWN) {
                 AppLog(L"tray menu");
                 App::I().TrayMenu();
-            } else if (lp == WM_LBUTTONUP) {
-                // 左键：已经在最前就收起来，否则叫出来（和系统托盘图标的习惯一致）
+            } else if (ev == NIN_SELECT || ev == NIN_KEYSELECT ||
+                       ev == WM_LBUTTONUP || ev == WM_LBUTTONDBLCLK) {
                 AppLog(L"tray click");
                 if (IsWindowVisible(h) && !IsIconic(h) && GetForegroundWindow() == h)
                     ShowWindow(h, SW_MINIMIZE);
@@ -1501,6 +1510,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                     UI_ShowMain(true);
             }
             return 0;
+        }
 
         case WM_HOTKEY:
             AppLog(L"hotkey");
