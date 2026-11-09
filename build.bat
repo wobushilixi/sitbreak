@@ -14,7 +14,8 @@ cd /d "%~dp0"
 if not exist build mkdir build
 
 rem icon + version info (skipped harmlessly when windres is missing)
-if exist "%MINGW_BIN%\windres.exe" (
+where windres >nul 2>nul
+if not errorlevel 1 (
   windres -c 65001 -I src -i src\app.rc -O coff -o build\app.res.o
   if errorlevel 1 echo warning: version resource failed, building without it
 )
