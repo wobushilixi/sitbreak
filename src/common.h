@@ -166,6 +166,10 @@ inline const PlayDef& PlayDefOf(int k) {
 
 constexpr UINT WM_TRAY = WM_APP + 1;
 constexpr UINT WM_TICK = WM_APP + 2;
+// 「再启动一个实例并带 --quit」时，用来让已经在跑的那个实例干净退出
+constexpr UINT WM_QUITAPP = WM_APP + 9;
+// 「再启动一个实例（不带参数）」时，用来把主界面叫到前台
+constexpr UINT WM_SHOWMAIN = WM_APP + 10;
 
 // ---------------------------------------------------------------- 应用逻辑
 struct App {

@@ -74,6 +74,7 @@ static std::wstring g_toastText;
 static bool g_demo = false;
 static bool g_silent = false;
 static int g_setAuto = 0;   // 1 开 / -1 关 / 0 不处理
+static bool g_quitReq = false;   // 第二个实例带 --quit：让已在跑的实例退出
 static std::wstring g_demoKind;
 static UINT g_msgTaskbarCreated = 0;
 static int g_promptX = 0, g_promptY = 0;
@@ -1486,6 +1487,16 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
 
+        case WM_SHOWMAIN:
+            UI_ShowMain(true);
+            return 0;
+
+        case WM_QUITAPP:            // 外部（SitBreak.exe --quit）要求退出
+            App::I().SaveAll();
+            DestroyWindow(h);
+            PostQuitMessage(0);
+            return 0;
+
         case WM_QUERYENDSESSION:
             App::I().SaveAll();
             return TRUE;
@@ -1708,6 +1719,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
             g_demoKind = cmd.substr(p + 7, e == std::wstring::npos ? std::wstring::npos : e - p - 7);
         }
         if (cmd.find(L"--silent") != std::wstring::npos) g_silent = true;
+        if (cmd.find(L"--quit") != std::wstring::npos) g_quitReq = true;
         if (cmd.find(L"--autostart=on") != std::wstring::npos) g_setAuto = 1;
         else if (cmd.find(L"--autostart=off") != std::wstring::npos) g_setAuto = -1;
     }
@@ -1716,13 +1728,21 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     if (!g_demo && mtx && GetLastError() == ERROR_ALREADY_EXISTS) {
         Log(L"already running");
         HWND other = FindWindowW(L"SitBreakWin", L"起身吧 SitBreak");
+        if (other && g_quitReq) {
+            Log(L"quit requested");
+            PostMessageW(other, WM_QUITAPP, 0, 0);
+            return 0;
+        }
         if (other) {
             DWORD pid = 0;
             GetWindowThreadProcessId(other, &pid);
             AllowSetForegroundWindow(pid);
-            PostMessageW(other, WM_SYSCOMMAND, SC_RESTORE, 0);
+            PostMessageW(other, WM_SHOWMAIN, 0, 0);
+            // 兜底：即使消息没被主循环及时处理，也直接把它叫到前台
             ShowWindow(other, IsIconic(other) ? SW_RESTORE : SW_SHOWNORMAL);
+            SetWindowPos(other, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             SetForegroundWindow(other);
+            Log(L"raised");
         }
         return 0;
     }
@@ -1755,6 +1775,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = L"SitBreakWin";
     wc.style = CS_DROPSHADOW;
+    wc.hIcon = (HICON)LoadImageW(hInst, L"IDI_SITBREAK", IMAGE_ICON, 0, 0,
+                                 LR_DEFAULTSIZE | LR_SHARED);
+    wc.hIconSm = (HICON)LoadImageW(hInst, L"IDI_SITBREAK", IMAGE_ICON,
+                                   GetSystemMetrics(SM_CXSMICON),
+                                   GetSystemMetrics(SM_CYSMICON), LR_SHARED);
     RegisterClassExW(&wc);
     g_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 
@@ -1790,8 +1815,15 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         if (mtx) CloseHandle(mtx);
         return 0;
     }
-    if (!g_silent) UI_ShowMain(true);
-    Log(L"shown");
+    if (g_silent) {
+        // 开机静默启动：不弹窗打扰，但窗口是「最小化到任务栏」而不是隐藏。
+        // 隐藏的 WS_EX_APPWINDOW 窗口会留下一个点不动的假任务栏按钮，这里避开它。
+        ShowWindow(g_main.hwnd, SW_SHOWMINNOACTIVE);
+        Log(L"shown minimized");
+    } else {
+        UI_ShowMain(true);
+        Log(L"shown");
+    }
 
     // 开发期预览：--demo=prompt|train|settings|toast
     if (g_demo) {
